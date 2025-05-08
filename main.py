@@ -21,9 +21,14 @@ CHECKPOINT_INTERVAL = 10000
 POLL_INTERVAL = 15  # Seconds between new block checks
 
 # Initialize Web3
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-if not w3.is_connected():
-    raise ConnectionError("Failed to connect to RPC")
+for attempt in range(MAX_RETRIES):
+    w3 = Web3(Web3.HTTPProvider(RPC_URL))
+    if w3.is_connected():
+        break
+    print(f"RPC connection attempt {attempt + 1} failed")
+    time.sleep(RETRY_DELAY)
+else:
+    raise ConnectionError("Failed to connect to RPC after retries")
 
 # Database setup
 def init_db():
