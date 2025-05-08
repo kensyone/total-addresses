@@ -22,11 +22,15 @@ POLL_INTERVAL = 15  # Seconds between new block checks
 
 # Initialize Web3
 for attempt in range(MAX_RETRIES):
-    w3 = Web3(Web3.HTTPProvider(RPC_URL))
-    if w3.is_connected():
-        break
-    print(f"RPC connection attempt {attempt + 1} failed")
-    time.sleep(RETRY_DELAY)
+    try:
+        w3 = Web3(Web3.HTTPProvider(RPC_URL))
+        if w3.is_connected():
+            break
+        print(f"RPC connection attempt {attempt + 1} failed: Not connected")
+        time.sleep(RETRY_DELAY)
+    except Exception as e:
+        print(f"RPC connection attempt {attempt + 1} failed: {str(e)}")
+        time.sleep(RETRY_DELAY)
 else:
     raise ConnectionError("Failed to connect to RPC after retries")
 
