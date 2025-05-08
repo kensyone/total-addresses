@@ -1,6 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from web3 import Web3
 import sqlite3
@@ -20,19 +20,23 @@ MAX_RETRIES = 3
 CHECKPOINT_INTERVAL = 10000
 POLL_INTERVAL = 15  # Seconds between new block checks
 
-# Initialize Web3
-for attempt in range(MAX_RETRIES):
-    try:
-        w3 = Web3(Web3.HTTPProvider(RPC_URL))
-        if w3.is_connected():
-            break
-        print(f"RPC connection attempt {attempt + 1} failed: Not connected")
+# Initialize Web3 with retry logic
+def init_web3():
+    for attempt in range(MAX_RETRIES):
+        try:
+            w3 = Web3(Web3.HTTPProvider(RPC_URL))
+            if w3.is_connected():
+                print("Successfully connected to RPC")
+                return w3
+            print(f"RPC connection attempt {attempt + 1} failed: Not connected")
+        except Exception as e:
+            print(f"RPC connection attempt {attempt + 1} failed: {str(e)}")
         time.sleep(RETRY_DELAY)
-    except Exception as e:
-        print(f"RPC connection attempt {attempt + 1} failed: {str(e)}")
-        time.sleep(RETRY_DELAY)
-else:
-    raise ConnectionError("Failed to connect to RPC after retries")
+    return None
+
+w3 = init_web3()
+if not w3:
+    print("Warning: Failed to initialize Web3 connection. The service will start but won't be able to scan blocks.")
 
 # Database setup
 def init_db():
@@ -69,8 +73,13 @@ class BlockScanner(threading.Thread):
         super().__init__(daemon=True)
         self.lock = threading.Lock()
         self.running = True
+        self.connected = w3 is not None
 
     def run(self):
+        if not self.connected:
+            print("Scanner not started - no RPC connection")
+            return
+
         while self.running:
             try:
                 if not self.is_initial_scan_complete():
@@ -113,6 +122,9 @@ class BlockScanner(threading.Thread):
             db_conn.commit()
 
     def process_block_range(self, start, end):
+        if not self.connected:
+            return set()
+
         addresses = set()
         retries = 0
         
@@ -141,6 +153,9 @@ class BlockScanner(threading.Thread):
                     return set()
 
     def run_initial_scan(self):
+        if not self.connected:
+            return
+
         last_processed = self.get_last_processed_block()
         end_block = w3.eth.block_number
 
@@ -167,6 +182,9 @@ class BlockScanner(threading.Thread):
         print(f"Initial scan complete. Processed up to block {end_block}")
 
     def monitor_new_blocks(self):
+        if not self.connected:
+            return
+
         last_block = self.get_last_processed_block()
         
         while self.running:
@@ -212,9 +230,13 @@ async def get_total_addresses():
         if progress:
             last_block, is_complete, last_updated = progress
             message = "Complete" if is_complete else "Initial scan in progress"
+            if not scanner.connected:
+                message = "RPC disconnected - " + message
         else:
             last_block, is_complete, last_updated = 0, False, 0
             message = "No scan progress yet"
+            if not scanner.connected:
+                message = "RPC disconnected - " + message
         
         return {
             "total_addresses": total_addresses,
@@ -226,7 +248,11 @@ async def get_total_addresses():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "alive", "scanner_alive": scanner.is_alive()}
+    return {
+        "status": "alive",
+        "scanner_alive": scanner.is_alive(),
+        "rpc_connected": scanner.connected
+    }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
